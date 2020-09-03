@@ -119,7 +119,10 @@ def train(trainloader, model, optimizer, criterion, epoch, num_batches):
         output = model(inputs)
         loss = criterion(output, target)
         loss.backward()
+        #  (i == num_batches - 1) 同步的屏障点！！，这里可以改成我们自己想要的样子！！！
         wait_time = HLSGD(model, (i == num_batches - 1))   # Model averaging
+
+
         optimizer.step()
         epoch_loss += loss.item()
         running_loss += loss.item()
@@ -146,6 +149,9 @@ def train(trainloader, model, optimizer, criterion, epoch, num_batches):
 def HLSGD(model, force_async=False):
     global G_local_latest, global_rep, init, G_sum, backup_state_dict, counter
     local_train = init or rep_not_ready(global_rep)
+    # 最重要的实际是这句
+    # dist.barrier(), 这个是来自torch.distributed.barrier(), 根据pytorch的官网的介绍, 这个函数的功能是同步所有的进程, 直到整组(也就是所有节点的所有GPU)
+    # 到达这个函数的时候, 才会执行后面的代码, 看上面的代码, 保证所有的节点都同步了参数
     b_rep = dist.barrier(async_op=True)
     sync_start_time = time.time()
     b_rep.wait()
@@ -176,6 +182,7 @@ def HLSGD(model, force_async=False):
 
             G_local_latest[name] = grad_temp
             G_sum[name].zero_()
+            # 同步参数
             global_rep[name] = dist.all_reduce(G_local_latest[name], op=dist.ReduceOp.SUM, async_op=True)
             counter = 0
             if force_async:
